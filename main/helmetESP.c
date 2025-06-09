@@ -3,9 +3,15 @@
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_adc/adc_oneshot.h"
-#include "esp_adc/adc_cali.h"
+#include "driver/gpio.h"
+#include "driver/adc.h"
+#include "esp_adc_cal.h"
 #include "nvs_flash.h"
+
+// ADC Configuration
+#define ADC1_CHANNEL ADC1_CHANNEL_4  // GPIO4 on XIAO ESP32-C3
+#define THRESHOLD_VOLTAGE 1.3f  // Midpoint between 0.7V and 1.9V
+static esp_adc_cal_characteristics_t *adc_chars;
 
 /* NimBLE headers */
 #include "nimble/nimble_port.h"
@@ -17,7 +23,15 @@
 // BLE settings
 static const char *device_name = "VEHICLE-START";
 static bool ble_active = false;
-static adc_oneshot_unit_handle_t adc1_handle;
+
+static bool digital_input_state = false;
+
+// Voltage reading and state
+static float voltage = 0.0f;
+static bool should_advertise = false;
+static uint32_t last_state_change_time = 0;
+#define DEBOUNCE_DELAY_MS 3000  // 3 second debounce delay
+#define VOLTAGE_THRESHOLD 1.3f  // Voltage threshold in volts
 
 // BLE event handler
 static int ble_gap_event(struct ble_gap_event *event, void *arg) {
@@ -32,18 +46,22 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg) {
     return 0;
 }
 
-// Initialize ADC
+// Initialize ADC for digital threshold
 void init_adc() {
-    adc_oneshot_unit_init_cfg_t init_config1 = {
-        .unit_id = ADC_UNIT_1,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
-
-    adc_oneshot_chan_cfg_t config = {
-        .bitwidth = ADC_BITWIDTH_12,
-        .atten = ADC_ATTEN_DB_12,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_4, &config));
+    // Configure ADC
+    adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(ADC1_CHANNEL, ADC_ATTEN_DB_11);  // 0-3.1V range
+    
+    // Characterize ADC
+    adc_chars = calloc(1, sizeof(esp_adc_cal_characteristics_t));
+    esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, adc_chars);
+    if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP) {
+        printf("eFuse Two Point: Supported\n");
+    } else if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
+        printf("eFuse Vref: Supported\n");
+    } else {
+        printf("Using Default Vref: 1100mV\n");
+    }
 }
 
 // Start BLE advertising
@@ -140,29 +158,64 @@ void init_ble(void) {
 }
 
 void app_main() {
-    // Initialize ADC
-    init_adc();
     
-    // Initialize BLE
+    init_adc();
     init_ble();
     
-    printf("MQ3 BLE Monitor Started (ESP32-C6)\n");
+    printf("Helmet Detection Started (ESP32-C3 Seeed Studio)\n");
+    printf("Advertising when voltage >= %.2fV\n", VOLTAGE_THRESHOLD);
+    
+    // Initial read
+    int raw = adc1_get_raw(ADC1_CHANNEL);
+    voltage = esp_adc_cal_raw_to_voltage(raw, adc_chars) / 1000.0f;
+    should_advertise = (voltage >= VOLTAGE_THRESHOLD);
+    printf("Initial voltage: %.2fV - %s\n", voltage, 
+           should_advertise ? "ADVERTISING" : "NOT advertising");
+    
+    if (should_advertise) {
+        start_ble_advertising_vehicle();
+    }
+    
+    uint32_t last_print = 0;
     
     while (1) {
-        // Read MQ3 sensor (ADC value 0-4095)
-        int adc_value;
-        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_4, &adc_value));
+        // Read raw ADC value and convert to voltage
+        raw = adc1_get_raw(ADC1_CHANNEL);
+        voltage = esp_adc_cal_raw_to_voltage(raw, adc_chars) / 1000.0f;
         
-        float percentage = (adc_value / 4095.0) * 100;
+        // Get current time
+        uint32_t current_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
         
-        printf("MQ3 Reading: %d (%.1f%%)\n", adc_value, percentage);
+        // Check if we should change state
+        bool new_should_advertise = (voltage >= VOLTAGE_THRESHOLD);
         
-        if (percentage > 50.0) {
-            printf("Threshold exceeded! Stopping BLE advertising\n");
-            stop_ble_advertising();
+        // Only process state change if it's different from current state
+        if (new_should_advertise != should_advertise) {
+            // Only change state if the reading is stable for DEBOUNCE_DELAY_MS
+            if ((current_time - last_state_change_time) >= DEBOUNCE_DELAY_MS) {
+                should_advertise = new_should_advertise;
+                last_state_change_time = current_time;
+                
+                if (should_advertise) {
+                    printf("Voltage %.2fV >= %.2fV - Starting BLE advertising\n", 
+                           voltage, VOLTAGE_THRESHOLD);
+                    start_ble_advertising_vehicle();
+                } else {
+                    printf("Voltage %.2fV < %.2fV - Stopping BLE advertising\n",
+                           voltage, VOLTAGE_THRESHOLD);
+                    stop_ble_advertising();
+                }
+            }
         } else {
-            printf("Safe level! Starting BLE advertising - VEHICLE START\n");
-            start_ble_advertising_vehicle();
+            // Reset the timer if we're not trying to change state
+            last_state_change_time = current_time;
+        }
+        
+        // Debug output (every 2 seconds)
+        if ((current_time - last_print) >= 2000) {
+            printf("Voltage: %.2fV - %s\n", voltage, 
+                   should_advertise ? "ADVERTISING" : "NOT advertising");
+            last_print = current_time;
         }
         
         vTaskDelay(pdMS_TO_TICKS(1000));  // Check every second
