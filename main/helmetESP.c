@@ -9,7 +9,7 @@
 #include "nvs_flash.h"
 
 // ADC Configuration
-#define ADC1_CHANNEL ADC1_CHANNEL_4  // GPIO4 on XIAO ESP32-C3
+#define ADC1_CHANNEL ADC1_CHANNEL_4  // GPIO2 on XIAO ESP32-C3
 #define THRESHOLD_VOLTAGE 1.3f  // Midpoint between 0.7V and 1.9V
 static esp_adc_cal_characteristics_t *adc_chars;
 
