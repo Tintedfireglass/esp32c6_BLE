@@ -21,6 +21,7 @@ static int read_characteristic(uint16_t conn_handle, uint16_t val_handle);
 static int subscribe_to_notifications(uint16_t conn_handle, uint16_t val_handle, uint16_t ccc_handle);
 static int on_notify(uint16_t conn_handle, const struct ble_gatt_error *error,
                     struct ble_gatt_attr *attr, void *arg);
+static void periodic_read_task(void *arg);
 
 // Target device address to connect to
 static const uint8_t TARGET_ADDR[6] = {0xa6, 0x32, 0x0e, 0xe3, 0x85, 0xa0}; // a0:85:e3:0e:32:a6 in little-endian
@@ -388,6 +389,17 @@ static void rescan_task(void *arg) {
     vTaskDelete(NULL);
 }
 
+// Task to periodically read the characteristic
+static void periodic_read_task(void *arg) {
+    while (1) {
+        if (device_connected && conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+            printf("\n[Periodic Read] ");
+            read_characteristic(conn_handle, 0x0022);  // Read handle 0x0022
+        }
+        vTaskDelay(3000 / portTICK_PERIOD_MS);  // 3 second delay
+    }
+}
+
 // Start BLE scanning
 void start_scan(void)
 {
@@ -506,6 +518,9 @@ void app_main(void)
     // Start the host task
     printf("App: Starting BLE host task...\n");
     nimble_port_freertos_init(ble_host_task);
+    
+    // Create a task for periodic reads
+    xTaskCreate(periodic_read_task, "periodic_read", 4096, NULL, 5, NULL);
     
     // Keep the main task alive
     while (1) {
