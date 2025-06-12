@@ -9,7 +9,7 @@
 #include "host/ble_hs_adv.h"
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
-
+#include "display.h"
 #include "driver/spi_master.h"
 
 // LCD Function Prototypes
@@ -516,344 +516,6 @@ static void ble_app_on_sync_cb(void) { ble_app_on_sync(); }
 static void ble_app_on_reset_cb(int reason) { ble_app_on_reset(reason); }
 
 
-// ==== Pin Definitions ====
-#define PIN_NUM_MISO -1
-#define PIN_NUM_MOSI 6
-#define PIN_NUM_CLK  7
-#define PIN_NUM_CS   46
-#define PIN_NUM_DC   5
-#define PIN_NUM_RST  4
-#define PIN_NUM_BCKL 15
-
-#define SPI_HOST SPI2_HOST
-#define LCD_WIDTH  320
-#define LCD_HEIGHT 240
-
-static spi_device_handle_t spi;
-
-// ==== 5x8 ASCII Font Table (32-127) ====
-static const uint8_t font5x8[96][5] = {
-    // ASCII 32-127
-    {0x00,0x00,0x00,0x00,0x00}, // 32  ' '
-    {0x00,0x00,0x5F,0x00,0x00}, // 33  '!'
-    {0x00,0x07,0x00,0x07,0x00}, // 34  '"'
-    {0x14,0x7F,0x14,0x7F,0x14}, // 35  '#'
-    {0x24,0x2A,0x7F,0x2A,0x12}, // 36  '$'
-    {0x23,0x13,0x08,0x64,0x62}, // 37  '%'
-    {0x36,0x49,0x55,0x22,0x50}, // 38  '&'
-    {0x00,0x05,0x03,0x00,0x00}, // 39  '''
-    {0x00,0x1C,0x22,0x41,0x00}, // 40  '('
-    {0x00,0x41,0x22,0x1C,0x00}, // 41  ')'
-    {0x14,0x08,0x3E,0x08,0x14}, // 42  '*'
-    {0x08,0x08,0x3E,0x08,0x08}, // 43  '+'
-    {0x00,0x50,0x30,0x00,0x00}, // 44  ','
-    {0x08,0x08,0x08,0x08,0x08}, // 45  '-'
-    {0x00,0x60,0x60,0x00,0x00}, // 46  '.'
-    {0x20,0x10,0x08,0x04,0x02}, // 47  '/'
-    {0x3E,0x51,0x49,0x45,0x3E}, // 48  '0'
-    {0x00,0x42,0x7F,0x40,0x00}, // 49  '1'
-    {0x42,0x61,0x51,0x49,0x46}, // 50  '2'
-    {0x21,0x41,0x45,0x4B,0x31}, // 51  '3'
-    {0x18,0x14,0x12,0x7F,0x10}, // 52  '4'
-    {0x27,0x45,0x45,0x45,0x39}, // 53  '5'
-    {0x3C,0x4A,0x49,0x49,0x30}, // 54  '6'
-    {0x01,0x71,0x09,0x05,0x03}, // 55  '7'
-    {0x36,0x49,0x49,0x49,0x36}, // 56  '8'
-    {0x06,0x49,0x49,0x29,0x1E}, // 57  '9'
-    {0x00,0x36,0x36,0x00,0x00}, // 58  ':'
-    {0x00,0x56,0x36,0x00,0x00}, // 59  ';'
-    {0x08,0x14,0x22,0x41,0x00}, // 60  '<'
-    {0x14,0x14,0x14,0x14,0x14}, // 61  '='
-    {0x00,0x41,0x22,0x14,0x08}, // 62  '>'
-    {0x02,0x01,0x51,0x09,0x06}, // 63  '?'
-    {0x32,0x49,0x79,0x41,0x3E}, // 64  '@'
-    {0x7E,0x11,0x11,0x11,0x7E}, // 65  'A'
-    {0x7F,0x49,0x49,0x49,0x36}, // 66  'B'
-    {0x3E,0x41,0x41,0x41,0x22}, // 67  'C'
-    {0x7F,0x41,0x41,0x22,0x1C}, // 68  'D'
-    {0x7F,0x49,0x49,0x49,0x41}, // 69  'E'
-    {0x7F,0x09,0x09,0x09,0x01}, // 70  'F'
-    {0x3E,0x41,0x49,0x49,0x7A}, // 71  'G'
-    {0x7F,0x08,0x08,0x08,0x7F}, // 72  'H'
-    {0x00,0x41,0x7F,0x41,0x00}, // 73  'I'
-    {0x20,0x40,0x41,0x3F,0x01}, // 74  'J'
-    {0x7F,0x08,0x14,0x22,0x41}, // 75  'K'
-    {0x7F,0x40,0x40,0x40,0x40}, // 76  'L'
-    {0x7F,0x02,0x0C,0x02,0x7F}, // 77  'M'
-    {0x7F,0x04,0x08,0x10,0x7F}, // 78  'N'
-    {0x3E,0x41,0x41,0x41,0x3E}, // 79  'O'
-    {0x7F,0x09,0x09,0x09,0x06}, // 80  'P'
-    {0x3E,0x41,0x51,0x21,0x5E}, // 81  'Q'
-    {0x7F,0x09,0x19,0x29,0x46}, // 82  'R'
-    {0x46,0x49,0x49,0x49,0x31}, // 83  'S'
-    {0x01,0x01,0x7F,0x01,0x01}, // 84  'T'
-    {0x3F,0x40,0x40,0x40,0x3F}, // 85  'U'
-    {0x1F,0x20,0x40,0x20,0x1F}, // 86  'V'
-    {0x3F,0x40,0x38,0x40,0x3F}, // 87  'W'
-    {0x63,0x14,0x08,0x14,0x63}, // 88  'X'
-    {0x07,0x08,0x70,0x08,0x07}, // 89  'Y'
-    {0x61,0x51,0x49,0x45,0x43}, // 90  'Z'
-    {0x00,0x7F,0x41,0x41,0x00}, // 91  '['
-    {0x02,0x04,0x08,0x10,0x20}, // 92  '\'
-    {0x00,0x41,0x41,0x7F,0x00}, // 93  ']'
-    {0x04,0x02,0x01,0x02,0x04}, // 94  '^'
-    {0x40,0x40,0x40,0x40,0x40}, // 95  '_'
-    {0x00,0x01,0x02,0x04,0x00}, // 96  '`'
-    {0x20,0x54,0x54,0x54,0x78}, // 97  'a'
-    {0x7F,0x48,0x44,0x44,0x38}, // 98  'b'
-    {0x38,0x44,0x44,0x44,0x20}, // 99  'c'
-    {0x38,0x44,0x44,0x48,0x7F}, // 100 'd'
-    {0x38,0x54,0x54,0x54,0x18}, // 101 'e'
-    {0x08,0x7E,0x09,0x01,0x02}, // 102 'f'
-    {0x0C,0x52,0x52,0x52,0x3E}, // 103 'g'
-    {0x7F,0x08,0x04,0x04,0x78}, // 104 'h'
-    {0x00,0x44,0x7D,0x40,0x00}, // 105 'i'
-    {0x20,0x40,0x44,0x3D,0x00}, // 106 'j'
-    {0x7F,0x10,0x28,0x44,0x00}, // 107 'k'
-    {0x00,0x41,0x7F,0x40,0x00}, // 108 'l'
-    {0x7C,0x04,0x18,0x04,0x78}, // 109 'm'
-    {0x7C,0x08,0x04,0x04,0x78}, // 110 'n'
-    {0x38,0x44,0x44,0x44,0x38}, // 111 'o'
-    {0x7C,0x14,0x14,0x14,0x08}, // 112 'p'
-    {0x08,0x14,0x14,0x18,0x7C}, // 113 'q'
-    {0x7C,0x08,0x04,0x04,0x08}, // 114 'r'
-    {0x48,0x54,0x54,0x54,0x20}, // 115 's'
-    {0x04,0x3F,0x44,0x40,0x20}, // 116 't'
-    {0x3C,0x40,0x40,0x20,0x7C}, // 117 'u'
-    {0x1C,0x20,0x40,0x20,0x1C}, // 118 'v'
-    {0x3C,0x40,0x30,0x40,0x3C}, // 119 'w'
-    {0x44,0x28,0x10,0x28,0x44}, // 120 'x'
-    {0x0C,0x50,0x50,0x50,0x3C}, // 121 'y'
-    {0x44,0x64,0x54,0x4C,0x44}, // 122 'z'
-    {0x00,0x08,0x36,0x41,0x00}, // 123 '{'
-    {0x00,0x00,0x7F,0x00,0x00}, // 124 '|'
-    {0x00,0x41,0x36,0x08,0x00}, // 125 '}'
-    {0x10,0x08,0x08,0x10,0x08}, // 126 '~'
-    {0x00,0x00,0x00,0x00,0x00}  // 127 DEL
-};
-
-// ==== Utility ====
-static inline void delay_ms(int ms) { vTaskDelay(ms / portTICK_PERIOD_MS); }
-
-// ==== GPIO Init ====
-static void ili9341_gpio_init(void) {
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST) | 
-                        (1ULL << PIN_NUM_BCKL) | (1ULL << PIN_NUM_CS),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&io_conf));
-    gpio_set_level(PIN_NUM_CS, 1);
-    gpio_set_level(PIN_NUM_DC, 0);
-    gpio_set_level(PIN_NUM_RST, 1);
-    if (PIN_NUM_BCKL != -1) gpio_set_level(PIN_NUM_BCKL, 1);
-}
-
-// ==== SPI Init ====
-static void spi_init(void) {
-    spi_bus_config_t buscfg = {
-        .miso_io_num = PIN_NUM_MISO,
-        .mosi_io_num = PIN_NUM_MOSI,
-        .sclk_io_num = PIN_NUM_CLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = LCD_WIDTH * LCD_HEIGHT * 2 + 8
-    };
-    spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = 40 * 1000 * 1000,
-        .mode = 0,
-        .spics_io_num = -1, // CS handled manually
-        .queue_size = 7,
-        .pre_cb = NULL,
-        .post_cb = NULL
-    };
-    ESP_ERROR_CHECK(spi_bus_initialize(SPI_HOST, &buscfg, SPI_DMA_CH_AUTO));
-    ESP_ERROR_CHECK(spi_bus_add_device(SPI_HOST, &devcfg, &spi));
-}
-
-// ==== LCD Command/Data ====
-static void ili9341_write_cmd(uint8_t cmd) {
-    gpio_set_level(PIN_NUM_DC, 0);
-    gpio_set_level(PIN_NUM_CS, 0);
-    spi_transaction_t t = { .length = 8, .tx_buffer = &cmd };
-    ESP_ERROR_CHECK(spi_device_transmit(spi, &t));
-    gpio_set_level(PIN_NUM_CS, 1);
-}
-static void ili9341_write_data(const uint8_t* data, int len) {
-    gpio_set_level(PIN_NUM_DC, 1);
-    gpio_set_level(PIN_NUM_CS, 0);
-    spi_transaction_t t = { .length = len * 8, .tx_buffer = data };
-    ESP_ERROR_CHECK(spi_device_transmit(spi, &t));
-    gpio_set_level(PIN_NUM_CS, 1);
-}
-
-// ==== LCD Reset ====
-static void ili9341_reset(void) {
-    gpio_set_level(PIN_NUM_RST, 1); delay_ms(50);
-    gpio_set_level(PIN_NUM_RST, 0); delay_ms(50);
-    gpio_set_level(PIN_NUM_RST, 1); delay_ms(150);
-}
-
-// ==== LCD Init Sequence ====
-static void ili9341_init(void) {
-    ili9341_reset();
-    ili9341_write_cmd(0x01); delay_ms(100);
-    ili9341_write_cmd(0x28);
-    ili9341_write_cmd(0xCF); uint8_t cf[]={0x00,0x83,0x30}; ili9341_write_data(cf,3);
-    ili9341_write_cmd(0xED); uint8_t ed[]={0x64,0x03,0x12,0x81}; ili9341_write_data(ed,4);
-    ili9341_write_cmd(0xE8); uint8_t e8[]={0x85,0x01,0x79}; ili9341_write_data(e8,3);
-    ili9341_write_cmd(0xCB); uint8_t cb[]={0x39,0x2C,0x00,0x34,0x02}; ili9341_write_data(cb,5);
-    ili9341_write_cmd(0xF7); uint8_t f7[]={0x20}; ili9341_write_data(f7,1);
-    ili9341_write_cmd(0xEA); uint8_t ea[]={0x00,0x00}; ili9341_write_data(ea,2);
-    ili9341_write_cmd(0xC0); uint8_t c0[]={0x26}; ili9341_write_data(c0,1);
-    ili9341_write_cmd(0xC1); uint8_t c1[]={0x11}; ili9341_write_data(c1,1);
-    ili9341_write_cmd(0xC5); uint8_t c5[]={0x35,0x3E}; ili9341_write_data(c5,2);
-    ili9341_write_cmd(0xC7); uint8_t c7[]={0xBE}; ili9341_write_data(c7,1);
-    ili9341_write_cmd(0x36); uint8_t d36[]={0x28}; ili9341_write_data(d36,1);
-    ili9341_write_cmd(0x3A); uint8_t d3a[]={0x55}; ili9341_write_data(d3a,1);
-    ili9341_write_cmd(0xB1); uint8_t b1[]={0x00,0x1B}; ili9341_write_data(b1,2);
-    ili9341_write_cmd(0xF2); uint8_t f2[]={0x08}; ili9341_write_data(f2,1);
-    ili9341_write_cmd(0x26); uint8_t d26[]={0x01}; ili9341_write_data(d26,1);
-    ili9341_write_cmd(0xE0); uint8_t e0[]={0x1F,0x1A,0x18,0x0A,0x0F,0x06,0x45,0x87,0x32,0x0A,0x07,0x02,0x07,0x05,0x00}; ili9341_write_data(e0,15);
-    ili9341_write_cmd(0xE1); uint8_t e1[]={0x00,0x25,0x27,0x05,0x10,0x09,0x3A,0x78,0x4D,0x05,0x18,0x0D,0x38,0x3A,0x1F}; ili9341_write_data(e1,15);
-    ili9341_write_cmd(0x11); delay_ms(120);
-    ili9341_write_cmd(0x29);
-}
-
-// ==== Set Drawing Window ====
-static void ili9341_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-    ili9341_write_cmd(0x2A);
-    uint8_t data_col[] = {x0>>8, x0&0xFF, x1>>8, x1&0xFF};
-    ili9341_write_data(data_col, 4);
-    ili9341_write_cmd(0x2B);
-    uint8_t data_row[] = {y0>>8, y0&0xFF, y1>>8, y1&0xFF};
-    ili9341_write_data(data_row, 4);
-    ili9341_write_cmd(0x2C);
-}
-
-// ==== Fill Screen ====
-void ili9341_fill(uint16_t color) {
-    ili9341_set_window(0, 0, LCD_WIDTH-1, LCD_HEIGHT-1);
-    uint8_t hi = color >> 8, lo = color & 0xFF;
-    uint8_t buf[128];
-    for (int i = 0; i < sizeof(buf)/2; i++) { buf[2*i]=hi; buf[2*i+1]=lo; }
-    gpio_set_level(PIN_NUM_DC, 1);
-    gpio_set_level(PIN_NUM_CS, 0);
-    int pixels = LCD_WIDTH * LCD_HEIGHT;
-    while (pixels > 0) {
-        int to_send = pixels > (sizeof(buf)/2) ? (sizeof(buf)/2) : pixels;
-        spi_transaction_t t = { .length = to_send*16, .tx_buffer = buf };
-        ESP_ERROR_CHECK(spi_device_transmit(spi, &t));
-        pixels -= to_send;
-    }
-    gpio_set_level(PIN_NUM_CS, 1);
-}
-
-// ==== Draw Single Character ====
-static void ili9341_draw_char(char c, uint16_t x, uint16_t y, uint16_t color) {
-    if (c < 32 || c > 127) c = '?';
-    const uint8_t *bitmap = font5x8[c-32];
-    ili9341_set_window(x, y, x+4, y+7);
-    gpio_set_level(PIN_NUM_DC, 1);
-    gpio_set_level(PIN_NUM_CS, 0);
-    uint8_t hi = color >> 8, lo = color & 0xFF;
-    uint8_t buf[2];
-    for (int row = 0; row < 8; row++) {
-        for (int col = 0; col < 5; col++) {
-            if (bitmap[col] & (1 << row)) { buf[0]=hi; buf[1]=lo; }
-            else { buf[0]=0; buf[1]=0; }
-            spi_transaction_t t = { .length = 16, .tx_buffer = buf };
-            ESP_ERROR_CHECK(spi_device_transmit(spi, &t));
-        }
-    }
-    gpio_set_level(PIN_NUM_CS, 1);
-}
-
-// ==== Draw Text String ====
-void ili9341_text(const char *str, uint16_t x, uint16_t y, uint16_t color) {
-    while (*str) {
-        ili9341_draw_char(*str, x, y, color);
-        x += 6; // 5px font + 1px space
-        str++;
-    }
-}
-// ==== Draw Single Character with Scale ====
-static void ili9341_draw_char_scaled(char c, uint16_t x, uint16_t y, uint16_t color, uint8_t scale) {
-    if (c < 32 || c > 127) c = '?';
-    if (scale == 0) scale = 1; // Prevent division by zero
-    
-    const uint8_t *bitmap = font5x8[c-32];
-    
-    // Set window for scaled character
-    ili9341_set_window(x, y, x + (5 * scale) - 1, y + (8 * scale) - 1);
-    
-    gpio_set_level(PIN_NUM_DC, 1);
-    gpio_set_level(PIN_NUM_CS, 0);
-    
-    uint8_t hi = color >> 8, lo = color & 0xFF;
-    uint8_t buf[2];
-    
-    // Draw each row of the character
-    for (int row = 0; row < 8; row++) {
-        // Repeat each row 'scale' times for vertical scaling
-        for (int row_repeat = 0; row_repeat < scale; row_repeat++) {
-            // Draw each column of the character
-            for (int col = 0; col < 5; col++) {
-                // Check if pixel should be on
-                bool pixel_on = bitmap[col] & (1 << row);
-                
-                // Repeat each pixel 'scale' times for horizontal scaling
-                for (int col_repeat = 0; col_repeat < scale; col_repeat++) {
-                    if (pixel_on) { 
-                        buf[0] = hi; 
-                        buf[1] = lo; 
-                    } else { 
-                        buf[0] = 0; 
-                        buf[1] = 0; 
-                    }
-                    spi_transaction_t t = { .length = 16, .tx_buffer = buf };
-                    ESP_ERROR_CHECK(spi_device_transmit(spi, &t));
-                }
-            }
-        }
-    }
-    gpio_set_level(PIN_NUM_CS, 1);
-}
-
-// ==== Draw Text String with Scale ====
-static void ili9341_text_scaled(const char *str, uint16_t x, uint16_t y, uint16_t color, uint8_t scale) {
-    if (scale == 0) scale = 1;
-    
-    uint16_t char_width = 5 * scale + scale; // scaled font width + spacing
-    uint16_t current_x = x;
-    
-    while (*str) {
-        ili9341_draw_char_scaled(*str, current_x, y, color, scale);
-        current_x += char_width;
-        str++;
-    }
-}
-
-// ==== Convenience functions for common sizes ====
-void ili9341_text_small(const char *str, uint16_t x, uint16_t y, uint16_t color) {
-    ili9341_text_scaled(str, x, y, color, 1); // 5x8 pixels
-}
-
-void ili9341_text_medium(const char *str, uint16_t x, uint16_t y, uint16_t color) {
-    ili9341_text_scaled(str, x, y, color, 2); // 10x16 pixels
-}
-
-void ili9341_text_large(const char *str, uint16_t x, uint16_t y, uint16_t color) {
-    ili9341_text_scaled(str, x, y, color, 3); // 15x24 pixels
-}
-
-void ili9341_text_xlarge(const char *str, uint16_t x, uint16_t y, uint16_t color) {
-    ili9341_text_scaled(str, x, y, color, 4); // 20x32 pixels
-}
-
 void app_main(void)
 {
     printf("App: Starting...\n");
@@ -868,17 +530,26 @@ void app_main(void)
     }
     printf("App: NVS init status: %s\n", esp_err_to_name(ret));
     
-    //init LCD
-    ili9341_gpio_init();
-    spi_init();
-    ili9341_init();
-
+    // Initialize display configuration
+    ili9341_config_t display_config = {
+        .spi_host = SPI2_HOST,
+        .pin_miso = -1,  // Not used for display
+        .pin_mosi = 6,   // GPIO6 for MOSI/SDA (changed from 13)
+        .pin_clk = 7,    // GPIO7 for CLK/SCK (changed from 12)
+        .pin_cs = 46,    // GPIO46 for CS (changed from 10)
+        .pin_dc = 5,     // GPIO5 for DC (changed from 11)
+        .pin_rst = 4,    // GPIO4 for RESET (changed from 9)
+        .pin_bckl = 15,  // GPIO15 for backlight control (changed from 14)
+        .spi_clock_speed_hz = 40 * 1000 * 1000  // 40MHz
+    };
+    
+    // Initialize display
+    ili9341_init(&display_config);
     ili9341_fill(0x0000); // Black background
 
-    ili9341_text_medium("WELCOME", 40, 100, 0xFFFF);        // 2x size (10x16 pixels)
-    ili9341_text_small("DEVICE STARTING...", 20, 130, 0x07E0); // 1x size (5x8 pixels)
-    
-    if (PIN_NUM_BCKL != -1) gpio_set_level(PIN_NUM_BCKL, 1);
+    // Display welcome message
+    ili9341_text_medium("WELCOME", 40, 100, 0xFFFF);        // White text
+    ili9341_text_small("DEVICE STARTING...", 20, 130, 0x07E0); // Green text
     // Initialize BLE controller and NimBLE host
 
     vTaskDelay(pdMS_TO_TICKS(1000)); // one second delay

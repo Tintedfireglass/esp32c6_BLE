@@ -1,8 +1,9 @@
 idf_component_register(
-    SRCS 
-        main.c 
-    REQUIRES 
-        nvs_flash 
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        nvs_flash
         bt
         driver
+        display
 )
